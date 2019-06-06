@@ -1,14 +1,15 @@
 ﻿using System;
 using System.Collections.Generic;
-using System.Diagnostics;
 using System.IO;
 using System.Linq;
+using System.Runtime.Serialization.Formatters.Binary;
 
 namespace GameEngine
 {
     /// <summary>
     /// Contains the unpacked and processed game data from a .DAT file
     /// </summary>
+    [Serializable]
     public partial class GameData
     {
 
@@ -24,7 +25,7 @@ namespace GameEngine
         public string[] Messages = null;
         public string GameName = null;
         public int TurnCounter { get; set; }
-
+        public int Seed { get; set; } = Guid.NewGuid().GetHashCode();
 
 
         private string CurrentFolder
@@ -56,40 +57,14 @@ namespace GameEngine
         {
             string gameRoot = GameName.Substring(0, GameName.IndexOf("."));
             int saves = Directory.GetFiles(CurrentFolder, gameRoot + "_*.sav").Length + 1;
-            string sg;
-            using (StreamWriter sw = new StreamWriter((sg = string.Format("{0}_{1}.sav", gameRoot, saves))))
+            string sg = $"{gameRoot}_{saves}.sav";
+
+            var serializer = new BinaryFormatter();
+
+            using (Stream s = new FileStream(sg, FileMode.Create, FileAccess.Write, FileShare.None))
             {
-                //write header
-                sw.WriteLine(string.Format("\"{0}\"", this.GameName));
-                sw.WriteLine(this.Items.Count(i => i.Moved()) + "/*Moved items*/");
-                sw.WriteLine(this.BitFlags.Count() + "/*Bit flag count*/");
-                sw.WriteLine(this.Counters.Count() + "/*Counters count*/");
-                sw.WriteLine(this.SavedRooms.Count() + "/*Saved rooms count*/");
-
-
-                //get all the changed items
-                this.Items.Select((item, indx) => new { item, indx })
-                    .Where(i => i.item.Moved())
-                    .All(i => { sw.WriteLine(i.indx  + "/*item index*/"); sw.WriteLine(i.item.Location + "/*Item location*/"); return true; });
-
-                this.BitFlags.Select((bf, indx) => new { bf, indx })
-                    .All(i => { sw.WriteLine(i.indx + "/*bitflag index*/"); sw.WriteLine((i.bf ? 1 : 0) + "/*bit flag value*/"); return true; });
-
-                this.Counters.Select((ct, indx) => new { ct, indx })
-                    .All(i => { sw.WriteLine(i.indx + "/*counter index*/"); sw.WriteLine(i.ct + "/*counter value*/"); return true; });
-
-                this.SavedRooms.Select((sr, indx) => new { sr, indx })
-                    .All(i => { sw.WriteLine(i.indx + "/*saved room index*/"); sw.WriteLine(i.sr + "/*saved room*/"); return true; });
-
-
-                sw.WriteLine(this.CurrentRoom + "/*Saved rooms count*/");
-                sw.WriteLine("{0} {1}", this.TakeSuccessful ? 1 : 0, "/*take successful*/");
-                sw.WriteLine(this.CurrentCounter + "/*current counter*/");
-                sw.WriteLine(this.LampLife + "/*lamp life*/");
-                sw.WriteLine(this.PlayerNoun + "/*player noun*/");
-                sw.WriteLine(this.SavedRoom + "/*saved room*/");
-                sw.WriteLine(this.TurnCounter + "/*turn counter*/");
-
+                serializer.Serialize(s, this);
+                s.Close();
             }
 
             return sg;
@@ -106,48 +81,13 @@ namespace GameEngine
         /// <returns>GameData class</returns>
         public static GameData LoadSnapShot(string pAdvGame, string pSnapShot)
         {
-
-            GameData gd = Load(pAdvGame);
-
-            DATToChunks.Load(pSnapShot);
-            DATToChunks.getTokens(1);//skip the first line. 
-
-            int[] header = DATToChunks.GetTokensAsInt(4);
-
-            //header[0] = changed items - multiply number by two as they are in pairs of index id and new location
-            //header[1] = bitflags  - pairs index, value
-            //header[2] = counters - pairs index, value
-            //header[3] = saved rooms - pairs index, value
-
-            //get header
-            int[] intarray = DATToChunks.GetTokensAsInt(header[0] * 2);
-            for (int i = 0; i < intarray.Length; i += 2)
-                gd.Items[intarray[i]].Location = intarray[i + 1];
-
-            //bit glags
-            intarray = DATToChunks.GetTokensAsInt(header[1] * 2);
-            for (int i = 0; i < intarray.Length; i += 2)
-                gd.BitFlags[intarray[i]] = intarray[i + 1] == 1;
-
-            intarray = DATToChunks.GetTokensAsInt(header[2] * 2);
-            for (int i = 0; i < intarray.Length; i += 2)
-                gd.Counters[intarray[i]] = intarray[i + 1];
-
-            intarray = DATToChunks.GetTokensAsInt(header[3] * 2);
-            for (int i = 0; i < intarray.Length; i += 2)
-                gd.SavedRooms[intarray[i]] = intarray[i + 1];
-
-            gd.CurrentRoom = DATToChunks.GetTokensAsInt(1).First();
-            gd.TakeSuccessful = DATToChunks.GetTokensAsInt(1).First() == 1;
-            gd.CurrentCounter = DATToChunks.GetTokensAsInt(1).First();
-            gd.LampLife = DATToChunks.GetTokensAsInt(1).First();
-            gd.PlayerNoun = DATToChunks.getTokens(1).First();
-            gd.SavedRoom = DATToChunks.GetTokensAsInt(1).First();
-            gd.TurnCounter = DATToChunks.GetTokensAsInt(1).First();
-
-
-
-            return gd;
+            var serializer = new BinaryFormatter();
+            using (Stream s = new FileStream(pSnapShot, FileMode.Open, FileAccess.Read, FileShare.None))
+            {
+                GameData d = (GameData)serializer.Deserialize(s);
+                s.Close();
+                return d;
+            }
         }
 
         /// <summary>
@@ -241,7 +181,7 @@ namespace GameEngine
                 gd.Rooms[ctr] = new Room(DATToChunks.GetTokensAsInt(6), DATToChunks.getTokens(1).First());
 
 
-                gd.Rooms[ctr].Description += "\n\n" + _ObviousExits;
+                gd.Rooms[ctr].Description += Environment.NewLine + Environment.NewLine + _ObviousExits;
 
                 if (gd.Rooms[ctr].Exits.Count(e => e > 0) > 0)
                 {
@@ -524,11 +464,12 @@ namespace GameEngine
             Counters[pIndex] = pVal;
         }
 
-    
+
         #endregion
 
         #region game structure classes
 
+        [Serializable]
         public class GameHeader
         {
             public GameHeader(int[] pVals)
@@ -561,6 +502,7 @@ namespace GameEngine
             public int TreasureRoom { get; private set; }
         }
 
+        [Serializable]
         public class GameFooter
         {
             public GameFooter(int[] pVals)
@@ -575,7 +517,7 @@ namespace GameEngine
             public int Unknown { get; set; }
         }
 
-
+        [Serializable]
         public class Room
         {
             public Room(int[] pExits, string pDescription)
@@ -595,11 +537,12 @@ namespace GameEngine
             /// <returns></returns>
             public override string ToString()
             {
-                return string.Format("\"{0}\"\r\n{1}", Description, Exits.Select(i => i.ToString() + "\r\n"));
+                return string.Format("\"{0}\"\r\n{1}", Description, Exits.Select(i => i.ToString() + Environment.NewLine));
             }
 
         }
 
+        [Serializable]
         public class Item
         {
             public Item(string pDescription, int pLocation)
@@ -643,6 +586,7 @@ namespace GameEngine
             }
         }
 
+        [Serializable]
         public class Action
         {
             public Action()
@@ -811,7 +755,7 @@ namespace GameEngine
 
             public override string ToString()
             {
-                return String.Join("\r\n", ToDat().Select(c => c.ToString()));
+                return String.Join(Environment.NewLine, ToDat().Select(c => c.ToString()));
 
             }
 
